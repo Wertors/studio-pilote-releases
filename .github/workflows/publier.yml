@@ -1,0 +1,41 @@
+# Publie une version de Studio Pilote à partir de morceaux envoyés sur une branche « claude/publier-vX.Y.Z ».
+# Le .exe (plus de 100 Mo) est trop gros pour un seul fichier git : il arrive en morceaux dans publier/,
+# avec publier/version.txt (ex. 2.9.3), publier/sha256.txt (empreinte du .exe) et publier/notes.md.
+# Le workflow recolle le .exe, vérifie l'empreinte, crée la Release (dernière version) puis supprime la branche.
+name: Publier une version
+
+on:
+  push:
+    branches: ["claude/publier-*"]
+
+permissions:
+  contents: write
+
+jobs:
+  publier:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Recoller et vérifier le .exe
+        run: |
+          VERSION=$(tr -d '[:space:]' < publier/version.txt)
+          echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "version invalide : $VERSION"; exit 1; }
+          [ "$GITHUB_REF_NAME" = "claude/publier-v$VERSION" ] || { echo "branche $GITHUB_REF_NAME ≠ version $VERSION"; exit 1; }
+          cat publier/morceau.* > Studio-Pilote.exe
+          echo "$(tr -d '[:space:]' < publier/sha256.txt)  Studio-Pilote.exe" | sha256sum -c -
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Créer la Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v$VERSION" >/dev/null 2>&1; then echo "v$VERSION existe déjà"; exit 1; fi
+          gh release create "v$VERSION" Studio-Pilote.exe \
+            --target main --latest \
+            --title "Studio Pilote $VERSION" \
+            --notes-file publier/notes.md
+
+      - name: Supprimer la branche d'envoi
+        if: success()
+        run: git push origin --delete "$GITHUB_REF_NAME"
